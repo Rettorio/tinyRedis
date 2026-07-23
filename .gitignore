@@ -1,0 +1,36 @@
+# Compiled binaries and package files
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries (built via 'go test -c')
+*.test
+
+# Output of the go coverage tool
+*.out
+*.coverprofile
+profile.cov
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Dependency directories
+# Only uncomment vendor/ if you strictly do not want to commit dependencies.
+# vendor/
+
+# Local environment configuration variables
+.env
+.env.*
+!.env.example
+
+# Common IDEs and text editors
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
