@@ -45,7 +45,7 @@ func TestStorage(t *testing.T) {
         },
         "delete existing item": {
             testName: "remove new hp movie", want: true, run: func(db *rdb) any {
-                return db.DEL("HP 9")
+                return db.DEL("HP 8")
             },
         },
         "delete not existed item": {
