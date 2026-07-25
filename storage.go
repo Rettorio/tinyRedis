@@ -10,8 +10,8 @@ type rdb struct {
 
 // GET take string and return string or nil based on given key
 func (db *rdb) GET(key string) string {
-    db.mu.Lock()
-    defer db.mu.Unlock()
+    db.mu.RLock()
+    defer db.mu.RUnlock()
 
     return db.rmap[key]
 }
