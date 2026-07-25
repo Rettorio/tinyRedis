@@ -32,23 +32,21 @@ func (session *ReaderSession) Read() error {
     // parse simple string
     if session.inputType == '+' {
         simpString, err := session.reader.ReadBytes('\n')
-        session.content = string(simpString)
+        session.content = string(simpString[:2])
         session.isComplete = true
         if err != nil {
             return  err
         }
-        session.reader.Discard(session.reader.Buffered())
         return  nil
     }
     // parse error
     if session.inputType == '-' {
         errMsg, err := session.reader.ReadBytes('\n')
-        session.content = errors.New(string(errMsg))
+        session.content = errors.New(string(errMsg[:2]))
         session.isComplete = true
         if err != nil {
             return  err
         }
-        session.reader.Discard(session.reader.Buffered())
         return nil
     }
     // parse integer
@@ -63,7 +61,6 @@ func (session *ReaderSession) Read() error {
             return err
         }
         session.content = num
-        session.reader.Discard(session.reader.Buffered())
         return nil
     }
     // parse bulkstring
@@ -84,7 +81,6 @@ func (session *ReaderSession) Read() error {
         if nlength == -1 {
             session.content = ""
             session.isComplete = true
-            session.reader.Discard(session.reader.Buffered())
             return  nil
         }
         session.inputLength = nlength
@@ -96,8 +92,8 @@ func (session *ReaderSession) Read() error {
             return err
         }
         session.content = string(s)
+        session.reader.Discard(2) // remove traling \r\n
         session.isComplete = true
-        session.reader.Discard(session.reader.Buffered())
         return nil
     }
     // parse array
@@ -105,7 +101,6 @@ func (session *ReaderSession) Read() error {
         slength, err := session.reader.ReadBytes('\n')
         if err != nil {
             session.isComplete = true
-            session.reader.Discard(session.reader.Buffered())
             return fmt.Errorf("Malformed data : %v", err)
         }
         nlength, err := parseNumber(slength)
@@ -114,7 +109,6 @@ func (session *ReaderSession) Read() error {
         if nlength <= 0 {
             session.content = content
             session.isComplete = true
-            session.reader.Discard(session.reader.Buffered())
             return nil
         }
         // temp item length
@@ -124,14 +118,12 @@ func (session *ReaderSession) Read() error {
                 nbyte,err := session.reader.ReadBytes('\n')
                 if err != nil {
                     session.isComplete = true
-                    session.reader.Discard(session.reader.Buffered())
                     return fmt.Errorf("Malformed data : %v", err)
                 }
                 // {'$','4','\r','\n'} skip type notation
                 ntemp,err = parseNumber(nbyte[1:])
                 if err != nil {
                     session.isComplete = true
-                    session.reader.Discard(session.reader.Buffered())
                     return fmt.Errorf("Malformed data : %v", err)
                 }
                 continue
@@ -142,7 +134,6 @@ func (session *ReaderSession) Read() error {
                 if err != nil {
                     session.isComplete = true
                     session.content = content
-                    session.reader.Discard(session.reader.Buffered())
                     return errors.New("Malformed data : %v")
                 }
                 content = append(content, string(line))
@@ -153,7 +144,6 @@ func (session *ReaderSession) Read() error {
         // safely assume content is match with arr length
         session.content = content
         session.isComplete = true
-        session.reader.Discard(session.reader.Buffered())
         return nil
     }
     // fallback
