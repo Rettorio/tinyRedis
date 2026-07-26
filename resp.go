@@ -5,170 +5,66 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 )
 
-// Session memory of reader
-// The goal is to write resp reader that is aware
-type ReaderSession struct {
-    inputType      byte
-    isComplete     bool
-    inputLength    int
-    content        any
-    reader         *bufio.Reader
+
+type Command struct {
+    Method      string
+    Args        []string
 }
 
-func NewSession(reader *bufio.Reader) (*ReaderSession,error) {
+
+func ReadCommand(reader *bufio.Reader) (*Command,error) {
     inpByte, err := reader.ReadByte()
-    if
-        err != nil || (inpByte != '+' && inpByte != ':' && inpByte != '$' && inpByte != '-' && inpByte != '*') {
+    if err != nil {
 
-        return nil,errors.New("Malformed data : unknown type")
+        return nil,fmt.Errorf("Unkonwn error %v", err)
     }
-    return &ReaderSession{inputType: inpByte, reader: reader},nil
-}
+    if inpByte != '*' {
+        return nil,errors.New("Unknown Command")
+    }
 
-func (session *ReaderSession) Read() error {
-    // parse simple string
-    if session.inputType == '+' {
-        simpString, err := session.reader.ReadBytes('\n')
-        session.content = string(simpString[:2])
-        session.isComplete = true
-        if err != nil {
-            return  err
-        }
-        return  nil
-    }
-    // parse error
-    if session.inputType == '-' {
-        errMsg, err := session.reader.ReadBytes('\n')
-        session.content = errors.New(string(errMsg[:2]))
-        session.isComplete = true
-        if err != nil {
-            return  err
-        }
-        return nil
-    }
-    // parse integer
-    if session.inputType == ':' {
-        numBytes, err := session.reader.ReadBytes('\n')
-        if err != nil {
-            return  err
-        }
-        num,err := parseNumber(numBytes)
-        session.isComplete = true
-        if err != nil {
-            return err
-        }
-        session.content = num
-        return nil
-    }
-    // parse bulkstring
-    if session.inputType == '$' {
-        // if session.inputLength == 0 {
-        slength, err := session.reader.ReadBytes('\n')
-        if err != nil {
-            return fmt.Errorf("Malformed data : %v", err)
-        }
-        // minlength of []byte is 3
-        if len(slength) < 3 {
-            return fmt.Errorf("Malformed data")
-        }
-        nlength, err := parseNumber(slength)
-        if err != nil {
-            return fmt.Errorf("Malformed data : %v", err)
-        }
-        if nlength == -1 {
-            session.content = ""
-            session.isComplete = true
-            return  nil
-        }
-        session.inputLength = nlength
-        // }
-
-        s := make([]byte, session.inputLength)
-        _,err = io.ReadFull(session.reader, s)
-        if err != nil {
-            return err
-        }
-        session.content = string(s)
-        session.reader.Discard(2) // remove traling \r\n
-        session.isComplete = true
-        return nil
-    }
-    // parse array
-    if session.inputType == '*' {
-        slength, err := session.reader.ReadBytes('\n')
-        if err != nil {
-            session.isComplete = true
-            return fmt.Errorf("Malformed data : %v", err)
-        }
-        nlength, err := parseNumber(slength)
-        var content []string
-        // empty array
-        if nlength <= 0 {
-            session.content = content
-            session.isComplete = true
-            return nil
-        }
-        // temp item length
-        ntemp := 0
-        for i := 1; i <= (nlength*2);i++ {
-            if i % 2 == 1 {
-                nbyte,err := session.reader.ReadBytes('\n')
-                if err != nil {
-                    session.isComplete = true
-                    return fmt.Errorf("Malformed data : %v", err)
-                }
-                // {'$','4','\r','\n'} skip type notation
-                ntemp,err = parseNumber(nbyte[1:])
-                if err != nil {
-                    session.isComplete = true
-                    return fmt.Errorf("Malformed data : %v", err)
-                }
-                continue
-            }
-            if i % 2 == 0 {
-                line := make([]byte, ntemp)
-                _,err := io.ReadFull(session.reader, line)
-                if err != nil {
-                    session.isComplete = true
-                    session.content = content
-                    return errors.New("Malformed data : %v")
-                }
-                content = append(content, string(line))
-                // Discard \r\n
-                session.reader.Discard(2)
-            }
-        }
-        // safely assume content is match with arr length
-        session.content = content
-        session.isComplete = true
-        return nil
-    }
-    // fallback
-    return nil
-}
-
-
-func parseInputLength(reader *bufio.Reader) (int,error) {
     slength, err := reader.ReadBytes('\n')
     if err != nil {
-        return 0,fmt.Errorf("unable to parse input length : %v", err)
-    }
-    // minlength of []byte is 3
-    if len(slength) < 3 {
-        return 0,fmt.Errorf("unable to parse input length")
+        return nil,fmt.Errorf("Malformed data : %v", err)
     }
     nlength, err := parseNumber(slength)
+    if nlength <= -1 {
+        return nil, errors.New("Malformed data")
+    }
+    if nlength == 0 {
+        return nil, errors.New("Empty Command")
+    }
+    // Parse command first
+    comm,err := parseBulkString(reader)
     if err != nil {
-        return 0,fmt.Errorf("unable to parse input length : %v", err)
+        return nil,err
     }
-    if nlength == -1 {
-        return 0,errors.New("unable to parse input length")
+    var command Command
+    if comm != "GET" && comm != "SET" && comm != "DEL" && comm != "PING" {
+        return nil,errors.New("Unknown Command")
     }
-    return  nlength,nil
+    for i := 1; i < nlength; i++ {
+        trg, err := parseBulkString(reader)
+        if err != nil {
+            return  nil,fmt.Errorf  ("Failed to parse command arguments : %v", err)
+        }
+        command.Args = append(command.Args, trg)
+    }
+
+    if comm == "SET" && len(command.Args) < 2 {
+        return nil,errors.New("Missing Value in SET Command.")
+    }
+    if (comm == "GET" || comm == "DEL") && len(command.Args) == 0 {
+        return nil,errors.New("Missing Key in Command")
+    }
+    command.Method = comm
+
+    return &command,nil
 }
+
 
 // parseNumber parse integer from strint
 // return error from strconv.Atoi()
@@ -182,27 +78,105 @@ func parseNumber(nums []byte) (int,error) {
     return num,nil
 }
 
-// parseBulkString takes string bytes
-// and length of string then return the trimmed string
-// if the actual string is less than given length return halformed string and an error.
-func parseBulkString(words []byte, length int) (string,error) {
-    s := make([]byte, length)
-    for i := 0;i < length;{
-        if words[i] == '\r' || words[i] == '\n' {
-            continue
-        }
-        s = append(s, words[i])
-        i++
+// parseBulkString takes bufio.Reader and
+// parse string in resp BulkString format
+func parseBulkString(reader *bufio.Reader) (string,error) {
+    // Discard '$' bulk string notation
+    reader.Discard(1)
+    slength, err := reader.ReadBytes('\n')
+    if err != nil {
+        return "",fmt.Errorf("Malformed data : %v", err)
     }
-    if len(s) != length {
-        return string(s),errors.New("given string length is less than given length")
+    nlength, err := parseNumber(slength)
+    if err != nil {
+        return "",fmt.Errorf("Malformed data : %v", err)
     }
+    if nlength <= 0 {
+        return "",errors.New("Unknown input.")
+    }
+
+    s := make([]byte, nlength)
+    _,err = io.ReadFull(reader, s)
+    if err != nil {
+        return "",fmt.Errorf("Something went wrong : %v", err)
+    }
+    reader.Discard(2)
     return string(s),nil
 }
 
-func parseString(words []byte) string {
-    if len(words) == 0 {
-        return ""
+
+// WriteSimpleString takes net.Conn and string to write in
+// resp format of simple string
+// return nil in successful operation
+func WriteSimpleString(conn net.Conn, content string) error {
+    final := []byte{'+'}
+    final = append(final, []byte(content)...)
+    final = append(final, '\r', '\n')
+
+    _,err := conn.Write(final)
+    if err != nil {
+        return err
     }
-    return string(words)
+
+    return nil
+}
+
+// WriteBulkString takes net.Conn and string to write in
+// resp format of bulk string
+// return nil in succesful operation
+func WriteBulkString(conn net.Conn, content string) error {
+    final := []byte{'$'}
+    final = append(final, []byte(strconv.Itoa(len(content)))...)
+    final = append(final, '\r','\n')
+    if content != "" {
+        final = append(final, []byte(content)...)
+    }
+    final = append(final, '\r','\n')
+
+    _,err := conn.Write(final)
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+
+// WriteNullBulkString write null string
+// in resp bulkstring format
+func WriteNullBulkString(conn net.Conn) error {
+    _,err := conn.Write([]byte{'$','-','1','\r','\n'})
+    if err != nil {
+        return err
+    }
+    return nil
+}
+
+// WriteInteger write integer
+// in resp format
+// return nil in succesful operation
+func WriteInteger(conn net.Conn, number int) error {
+    final := []byte{':'}
+    final = append(final, []byte(strconv.Itoa(number))...)
+
+    _,err := conn.Write(append(final, '\r','\n'))
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+
+// WriteError takes net.Conn and string of error
+// in resp error format
+// return nil if successful
+func WriteError(conn net.Conn, message string) error {
+    final := []byte{'-'}
+    final = append(final, []byte(message)...)
+
+    _,err := conn.Write(append(final, '\r','\n'))
+    if err != nil {
+        return err
+    }
+
+    return nil
 }

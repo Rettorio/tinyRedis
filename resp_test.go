@@ -2,194 +2,192 @@ package main
 
 import (
 	"bufio"
-	"errors"
+	"bytes"
+	"io"
+	"net"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestRespRead(t *testing.T) {
-	testCase := map[string]struct {
-		label          string
-		input          string
-		want           any
-		wantSessionErr string
-		wantReadErr    string
+type writeRecorder struct {
+	bytes.Buffer
+}
+
+func (w *writeRecorder) Close() error                       { return nil }
+func (w *writeRecorder) Read(b []byte) (int, error)         { return 0, io.EOF }
+func (w *writeRecorder) LocalAddr() net.Addr                { return nil }
+func (w *writeRecorder) RemoteAddr() net.Addr               { return nil }
+func (w *writeRecorder) SetDeadline(t time.Time) error      { return nil }
+func (w *writeRecorder) SetReadDeadline(t time.Time) error  { return nil }
+func (w *writeRecorder) SetWriteDeadline(t time.Time) error { return nil }
+
+func TestReadCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    *Command
+		wantErr string
 	}{
-		// Simple String (+)
-		"simple_string_ok": {
-			label: "simple OK",
-			input: "+OK\r\n",
-			want:  "OK\r\n",
-		},
-		"simple_string_hello": {
-			label: "simple hello",
-			input: "+hello\r\n",
-			want:  "hello\r\n",
-		},
-		"simple_string_empty": {
-			label: "simple empty",
-			input: "+\r\n",
-			want:  "\r\n",
-		},
-
-		// Error (-)
-		"error_unknown_command": {
-			label: "ERR unknown command",
-			input: "-ERR unknown command\r\n",
-			want:  errors.New("ERR unknown command\r\n"),
-		},
-		"error_wrongtype": {
-			label: "WRONGTYPE",
-			input: "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",
-			want:  errors.New("WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
-		},
-
-		// Integer (:)
-		"integer_one": {
-			label: ":1",
-			input: ":1\r\n",
-			want:  1,
-		},
-		"integer_zero": {
-			label: ":0",
-			input: ":0\r\n",
-			want:  0,
-		},
-		"integer_negative": {
-			label: ":-1",
-			input: ":-1\r\n",
-			want:  -1,
-		},
-		"integer_large": {
-			label: ":1000",
-			input: ":1000\r\n",
-			want:  1000,
-		},
-
-		// Bulk String ($)
-		"bulk_string_hello": {
-			label: "$5 hello",
-			input: "$5\r\nhello\r\n",
-			want:  "hello",
-		},
-		"bulk_string_spaces": {
-			label: "$11 hello world",
-			input: "$11\r\nhello world\r\n",
-			want:  "hello world",
-		},
-		"bulk_string_empty": {
-			label: "$0 empty",
-			input: "$0\r\n\r\n",
-			want:  "",
-		},
-		"bulk_string_null": {
-			label: "$-1 null",
-			input: "$-1\r\n",
-			want:  "",
-		},
-
-		// Array (*)
-		"array_empty": {
-			label: "*0 empty",
-			input: "*0\r\n",
-			want:  []string{},
-		},
-		"array_one_ping": {
-			label: "*1 PING",
+		{
+			name:  "ping",
 			input: "*1\r\n$4\r\nPING\r\n",
-			want:  []string{"PING"},
+			want:  &Command{Method: "PING"},
 		},
-		"array_two_get_key": {
-			label: "*2 GET key",
+		{
+			name:  "get key",
 			input: "*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n",
-			want:  []string{"GET", "key"},
+			want:  &Command{Method: "GET", Args: []string{"key"}},
 		},
-		"array_three_set_key_value": {
-			label: "*3 SET key value",
+		{
+			name:  "set key value",
 			input: "*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n",
-			want:  []string{"SET", "key", "value"},
+			want:  &Command{Method: "SET", Args: []string{"key", "value"}},
 		},
-
-		// Error / Edge Cases
-		"unknown_type_ampersand": {
-			label:          "unknown type &",
-			input:          "&5\r\nhello\r\n",
-			wantSessionErr: "Malformed data : unknown type",
+		{
+			name:  "del key with space",
+			input: "*2\r\n$3\r\nDEL\r\n$4\r\nHP 1\r\n",
+			want:  &Command{Method: "DEL", Args: []string{"HP 1"}},
 		},
-		"unknown_type_plain_text": {
-			label:          "plain text PING",
-			input:          "PING\r\n",
-			wantSessionErr: "Malformed data : unknown type",
+		{
+			name:  "set key with spaces",
+			input: "*3\r\n$3\r\nSET\r\n$4\r\nHP 1\r\n$40\r\nHarry Potter and the Philosopher's Stone\r\n",
+			want:  &Command{Method: "SET", Args: []string{"HP 1", "Harry Potter and the Philosopher's Stone"}},
 		},
-		"malformed_bulk_length_no_digits": {
-			label:       "$ no length",
-			input:       "$\r\n",
-			wantReadErr: "Malformed data",
+		{
+			name:    "empty array",
+			input:   "*0\r\n",
+			wantErr: "Empty Command",
+		},
+		{
+			name:    "not array simple string",
+			input:   "+OK\r\n",
+			wantErr: "Unknown Command",
+		},
+		{
+			name:    "not array bulk string",
+			input:   "$5\r\nhello\r\n",
+			wantErr: "Unknown Command",
+		},
+		{
+			name:    "inline text",
+			input:   "PING\r\n",
+			wantErr: "Unknown Command",
+		},
+		{
+			name:    "unknown command",
+			input:   "*1\r\n$4\r\nFOOB\r\n",
+			wantErr: "Unknown Command",
 		},
 	}
 
-	for name, tc := range testCase {
-		t.Run(name, func(t *testing.T) {
-			reader := bufio.NewReader(strings.NewReader(tc.input))
-			session, err := NewSession(reader)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := bufio.NewReader(strings.NewReader(tt.input))
+			got, err := ReadCommand(reader)
 
-			if err != nil {
-				if tc.wantSessionErr == "" {
-					t.Fatalf("NewSession unexpected error: %v", err)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error %q, got nil", tt.wantErr)
 				}
-				if err.Error() != tc.wantSessionErr {
-					t.Fatalf("NewSession error mismatch: got %q, want %q", err.Error(), tc.wantSessionErr)
+				if err.Error() != tt.wantErr {
+					t.Fatalf("error mismatch: got %q, want %q", err.Error(), tt.wantErr)
 				}
 				return
 			}
-			if tc.wantSessionErr != "" {
-				t.Fatalf("expected NewSession error %q, got nil", tc.wantSessionErr)
-			}
-
-			err = session.Read()
 			if err != nil {
-				if tc.wantReadErr == "" {
-					t.Fatalf("Read unexpected error: %v", err)
-				}
-				if err.Error() != tc.wantReadErr {
-					t.Fatalf("Read error mismatch: got %q, want %q", err.Error(), tc.wantReadErr)
-				}
-				return
+				t.Fatalf("unexpected error: %v", err)
 			}
-			if tc.wantReadErr != "" {
-				t.Fatalf("expected Read error %q, got nil", tc.wantReadErr)
-			}
-
-			if !readEqual(session.content, tc.want) {
-				t.Fatalf("content mismatch:\ngot  %#v\nwant %#v", session.content, tc.want)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("got  %+v\nwant %+v", got, tt.want)
 			}
 		})
 	}
 }
 
-func readEqual(a, b any) bool {
-	switch x := a.(type) {
-	case string:
-		y, ok := b.(string)
-		return ok && x == y
-	case int:
-		y, ok := b.(int)
-		return ok && x == y
-	case []string:
-		y, ok := b.([]string)
-		if !ok || len(x) != len(y) {
-			return ok && false
+func TestWrite(t *testing.T) {
+	t.Run("simple string", func(t *testing.T) {
+		var buf writeRecorder
+		err := WriteSimpleString(&buf, "OK")
+		if err != nil {
+			t.Fatal(err)
 		}
-		for i := range x {
-			if x[i] != y[i] {
-				return false
-			}
+		want := "+OK\r\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
 		}
-		return true
-	case error:
-		y, ok := b.(error)
-		return ok && x.Error() == y.Error()
-	default:
-		return false
-	}
+	})
+
+	t.Run("bulk string", func(t *testing.T) {
+		var buf writeRecorder
+		err := WriteBulkString(&buf, "hello")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "$5\r\nhello\r\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
+
+	t.Run("bulk string empty", func(t *testing.T) {
+		var buf writeRecorder
+		err := WriteBulkString(&buf, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "$0\r\n\r\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
+
+	t.Run("null bulk string", func(t *testing.T) {
+		var buf writeRecorder
+		err := WriteNullBulkString(&buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "$-1\r\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
+
+	t.Run("integer", func(t *testing.T) {
+		var buf writeRecorder
+		err := WriteInteger(&buf, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := ":1\r\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
+
+	t.Run("integer zero", func(t *testing.T) {
+		var buf writeRecorder
+		err := WriteInteger(&buf, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := ":0\r\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		var buf writeRecorder
+		err := WriteError(&buf, "ERR unknown command 'FOOB'")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "-ERR unknown command 'FOOB'\r\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
 }

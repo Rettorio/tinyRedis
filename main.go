@@ -34,47 +34,34 @@ func main() {
 func handleConnection(conn net.Conn, db *rdb) {
     defer conn.Close()
 
-    // live scanner
-    scanner := bufio.NewScanner(conn)
-
-
-    for scanner.Scan() {
-        if scanner.Err() != nil {
-            fmt.Fprintf(os.Stderr, "Error in input %v", scanner.Err().Error())
+    reader := bufio.NewReader(conn)
+    for {
+        cmd, err := ReadCommand(reader)
+        if err != nil {
             break
         }
-        input := scanner.Text()
-        fmt.Fprintf(os.Stderr, "Got command: %s\n", input)
 
-        //  split input by space
-        parts := strings.Fields(input)
-        if len(parts) == 0 {
-            continue
-        }
-
-        command := strings.ToUpper(parts[0])
-        //parts[0] is the command
-        //parts[1] is key and parts[2] is the value
-        switch command {
-            case "SET":
-                db.SET(parts[1], parts[2])
-                conn.Write([]byte("+Ok\r\n"))
-            case "GET":
-                val := db.GET(parts[1])
-                if val == "" {
-                    val = "novalue"
-                }
-                conn.Write(fmt.Appendf(nil,"+%s\r\n", val))
-                // conn.Write(fmt.Appendf("+%s\r\n", val))
-            case "DEL":
-                success := db.DEL(parts[1])
-                if !success {
-                    conn.Write(fmt.Appendf(nil, "+failed to delete %s\r\n", parts[1]))
-                } else {
-                    conn.Write(fmt.Appendf(nil, "+success to delete %s\r\n", parts[1]))
-                }
-            default :
-                conn.Write([]byte("-ERR unknown command\r\n"))
+        switch strings.ToUpper(cmd.Method) {
+        case "PING":
+            WriteSimpleString(conn, "PONG")
+        case "SET":
+            if len(cmd.Args) < 2 { WriteError(conn,"Missing Value in COMMAND"); continue }
+            db.SET(cmd.Args[0], cmd.Args[1])
+            WriteSimpleString(conn, "OK")
+        case "GET":
+            if len(cmd.Args) < 1 { WriteError(conn,"Missing Key in Command"); continue }
+            val := db.GET(cmd.Args[0])
+            if val == "" {
+                WriteNullBulkString(conn)
+            } else {
+                WriteBulkString(conn, val)  // $N\r\n<val>\r\n
+            }
+        case "DEL":
+            if len(cmd.Args) < 1 { WriteError(conn,"Missing Key in Command"); continue }
+            ok := db.DEL(cmd.Args[0])
+            WriteInteger(conn, map[bool]int{true: 1, false: 0}[ok])
+        default:
+            WriteError(conn, "unknown command '" + cmd.Method + "'")
         }
     }
 }
