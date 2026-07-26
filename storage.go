@@ -24,6 +24,14 @@ func (db *rdb) SET(key,value string) {
     db.rmap[key] = value
 }
 
+// EXISTS returns true if key exists in the map
+func (db *rdb) EXISTS(key string) bool {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	_, ok := db.rmap[key]
+	return ok
+}
+
 // DEL take string key and return false if item in given key is not exist
 // otherwise delete item in db with given key and return true
 func (db *rdb) DEL(key string) bool {

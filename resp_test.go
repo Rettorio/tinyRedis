@@ -190,4 +190,28 @@ func TestWrite(t *testing.T) {
 			t.Fatalf("got %q, want %q", buf.String(), want)
 		}
 	})
+
+	t.Run("array length zero", func(t *testing.T) {
+		var buf writeRecorder
+		err := WriteArrayLength(&buf, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "*0\r\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
+
+	t.Run("array length positive", func(t *testing.T) {
+		var buf writeRecorder
+		err := WriteArrayLength(&buf, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "*3\r\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
 }

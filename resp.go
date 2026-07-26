@@ -166,6 +166,14 @@ func WriteInteger(conn net.Conn, number int) error {
     return nil
 }
 
+// WriteArrayLength writes RESP array header
+func WriteArrayLength(conn net.Conn, length int) error {
+	final := []byte{'*'}
+	final = append(final, []byte(strconv.Itoa(length))...)
+	_, err := conn.Write(append(final, '\r', '\n'))
+	return err
+}
+
 // WriteError takes net.Conn and string of error
 // in resp error format
 // return nil if successful

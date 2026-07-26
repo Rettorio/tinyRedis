@@ -56,6 +56,12 @@ func handleConnection(conn net.Conn, db *rdb) {
             } else {
                 WriteBulkString(conn, val)  // $N\r\n<val>\r\n
             }
+        case "COMMAND":
+            WriteArrayLength(conn, 0)
+        case "EXISTS":
+            if len(cmd.Args) < 1 { WriteError(conn,"Missing Key in Command"); continue }
+            exists := db.EXISTS(cmd.Args[0])
+            WriteInteger(conn, map[bool]int{true: 1, false: 0}[exists])
         case "DEL":
             if len(cmd.Args) < 1 { WriteError(conn,"Missing Key in Command"); continue }
             ok := db.DEL(cmd.Args[0])
